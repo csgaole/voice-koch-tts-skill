@@ -8,6 +8,11 @@ OpenClaw skill wrapper for:
 - Koch robot execution
 - TTS playback
 
+Non-robot requests:
+
+- weather questions return live weather by voice
+- unrelated chat returns a short spoken reply without moving the robot
+
 ## Run
 
 ```bash

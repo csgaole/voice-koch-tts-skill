@@ -10,6 +10,11 @@ This package wires together:
 - Koch robot execution
 - TTS voice playback with an energetic childlike style
 
+It also supports non-robot spoken replies:
+
+- weather queries use live weather data
+- unrelated chat does not move the robot and returns a short spoken reply
+
 ## Repository Layout
 
 ```text

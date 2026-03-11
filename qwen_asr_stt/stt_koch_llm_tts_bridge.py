@@ -5,6 +5,7 @@ import shlex
 import sys
 from pathlib import Path
 
+from assistant_reply import get_weather_reply, is_weather_query, post_chat_reply
 from stt_koch_bridge import execute_koch_command, execute_koch_payload
 from stt_koch_llm_bridge import (
     ACTION_TO_KOCH_COMMAND,
@@ -24,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tts-rate", default=DEFAULT_RATE, help=f"TTS speaking rate. Default: {DEFAULT_RATE.replace('%', '%%')}")
     parser.add_argument("--tts-pitch", default=DEFAULT_PITCH, help=f"TTS pitch. Default: {DEFAULT_PITCH}")
     parser.add_argument("--mute-tts", action="store_true", help="Disable TTS playback.")
+    parser.add_argument("--assistant-location", default="Shanghai", help="Default location for weather replies. Default: Shanghai")
     return parser
 
 
@@ -68,6 +70,13 @@ def main() -> int:
         if not text.strip():
             fail("Recognized text is empty, nothing to send to the LLM.")
 
+        if is_weather_query(text):
+            print(f"[INFO] Handling weather query without robot execution.", file=sys.stderr)
+            weather_reply = get_weather_reply(text, default_location=args.assistant_location, timeout=args.llm_timeout)
+            print(f"[ASSISTANT] {weather_reply}")
+            maybe_speak(weather_reply, args)
+            return 0
+
         print(
             f"[INFO] Calling LLM {args.llm_model} via {normalize_base_url(args.llm_base_url or '')}",
             file=sys.stderr,
@@ -84,6 +93,15 @@ def main() -> int:
 
         if not llm_result["execute"]:
             print(f"[INFO] LLM declined execution: {llm_result.get('reason', '')}", file=sys.stderr)
+            assistant_reply = post_chat_reply(
+                user_text=text,
+                base_url=args.llm_base_url,
+                api_key=args.llm_api_key,
+                model=args.llm_model,
+                timeout=args.llm_timeout,
+            )
+            print(f"[ASSISTANT] {assistant_reply}")
+            maybe_speak(assistant_reply, args)
             return 0
         if llm_result["confidence"] < args.min_confidence:
             fail(
