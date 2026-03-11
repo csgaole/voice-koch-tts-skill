@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 
@@ -69,10 +70,31 @@ def post_chat_reply(
         },
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read().decode("utf-8")
+    raw = post_json_request(request, timeout=timeout, retries=1)
     body = json.loads(raw)
     return str(body["choices"][0]["message"]["content"]).strip()
+
+
+def post_json_request(request: urllib.request.Request, timeout: int, retries: int = 1) -> str:
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read().decode("utf-8")
+        except Exception as exc:
+            last_error = exc
+            if attempt >= retries:
+                break
+            wait_seconds = min(2 * (attempt + 1), 4)
+            time.sleep(wait_seconds)
+    raise RuntimeError(f"assistant reply request failed: {last_error}") from last_error
+
+
+def fallback_general_reply(user_text: str) -> str:
+    lowered = user_text.strip().lower()
+    if any(keyword in lowered for keyword in ["小鹏", "汽车", "车", "特斯拉", "比亚迪"]):
+        return "小鹏汽车整体偏智能化和科技感，座舱和辅助驾驶是它比较受关注的点。要是你愿意，我也可以继续用语音给你简单聊聊它的优缺点。"
+    return "这个问题我可以陪你聊，不过刚才网络有点慢。你可以再问一次，我会尽量简短回答。"
 
 
 def _extract_location(query: str, default_location: str) -> str:

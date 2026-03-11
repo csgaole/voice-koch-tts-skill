@@ -5,7 +5,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from assistant_reply import get_weather_reply, is_weather_query, post_chat_reply
+from assistant_reply import fallback_general_reply, get_weather_reply, is_weather_query, post_chat_reply
 from stt_koch_bridge import execute_koch_command, execute_koch_payload
 from stt_koch_llm_bridge import (
     ACTION_TO_KOCH_COMMAND,
@@ -92,13 +92,17 @@ def main() -> int:
 
         if not llm_result["execute"]:
             print(f"[INFO] LLM declined execution: {llm_result.get('reason', '')}", file=sys.stderr)
-            assistant_reply = post_chat_reply(
-                user_text=text,
-                base_url=args.llm_base_url,
-                api_key=args.llm_api_key,
-                model=args.llm_model,
-                timeout=args.llm_timeout,
-            )
+            try:
+                assistant_reply = post_chat_reply(
+                    user_text=text,
+                    base_url=args.llm_base_url,
+                    api_key=args.llm_api_key,
+                    model=args.llm_model,
+                    timeout=args.llm_timeout,
+                )
+            except Exception as exc:
+                print(f"[WARN] Assistant reply fallback triggered: {exc}", file=sys.stderr)
+                assistant_reply = fallback_general_reply(text)
             print(f"[ASSISTANT] {assistant_reply}")
             maybe_speak(assistant_reply, args)
             return 0
