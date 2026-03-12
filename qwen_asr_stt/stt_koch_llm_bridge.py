@@ -508,7 +508,12 @@ def should_retry_with_fallback_model(error: Exception, model: str, fallback_mode
     if not fallback_model or fallback_model == model:
         return False
     message = str(error)
-    return "resource_not_found_error" in message or "Permission denied" in message or "Not found the model" in message
+    return (
+        "resource_not_found_error" in message
+        or "Permission denied" in message
+        or "Not found the model" in message
+        or "LLM returned empty content" in message
+    )
 
 
 def strip_markdown_fences(text: str) -> str:
@@ -575,6 +580,30 @@ def parse_json_object(text: str) -> dict:
                 raise RuntimeError(f"Unable to parse LLM JSON: {candidate}") from exc
 
 
+def extract_message_content(body: dict) -> str:
+    try:
+        message = body["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Unexpected LLM response body: {body}") from exc
+
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                if item.strip():
+                    parts.append(item.strip())
+                continue
+            if isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
 def repair_json_with_llm(
     raw_text: str,
     base_url: str,
@@ -582,6 +611,9 @@ def repair_json_with_llm(
     model: str,
     timeout: int,
 ) -> dict:
+    if not raw_text.strip():
+        raise RuntimeError("LLM returned empty content; nothing to repair.")
+
     endpoint = f"{normalize_base_url(base_url)}/chat/completions"
     payload = {
         "model": model,
@@ -612,7 +644,9 @@ def repair_json_with_llm(
     raw = post_json_request(request, timeout=timeout, retries=1)
 
     body = json.loads(raw)
-    content = body["choices"][0]["message"]["content"]
+    content = extract_message_content(body)
+    if not content:
+        raise RuntimeError("LLM returned empty content during JSON repair.")
     return parse_json_object(content)
 
 
@@ -749,7 +783,10 @@ def call_llm(
         )
         raw_response = post_json_request(request, timeout=timeout, retries=1)
         body = json.loads(raw_response)
-        return body["choices"][0]["message"]["content"]
+        content = extract_message_content(body)
+        if not content:
+            raise RuntimeError(f"LLM returned empty content for model {model_name}")
+        return content
 
     fallback_model = (
         fallback_model
