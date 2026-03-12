@@ -1,4 +1,4 @@
-# voice-koch-tts-skill v1.0
+# voice-koch-tts-skill-v1.0
 
 OpenClaw skill for voice-driven Koch robot control with TTS playback.
 
@@ -20,7 +20,7 @@ It also supports non-robot spoken replies:
 ## Repository Layout
 
 ```text
-voice-koch-tts-skill/
+voice-koch-tts-skill-v1.0/
 ├── openclaw_skills/
 │   └── voice-koch-tts-skill/
 │       ├── SKILL.md

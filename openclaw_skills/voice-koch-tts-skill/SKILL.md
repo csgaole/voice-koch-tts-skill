@@ -1,9 +1,9 @@
 ---
-name: voice-koch-tts-skill v1.0
+name: voice-koch-tts-skill-v1.0
 description: 语音控制 Koch 机械臂并播放 TTS 回复的组合技能 1.0。适用于 OpenClaw 需要通过麦克风录音做本地 ASR、LLM 意图理解、Koch 机械臂控制，并在执行前后播放活泼童声风格语音反馈的场景。
 ---
 
-# voice-koch-tts-skill v1.0
+# voice-koch-tts-skill-v1.0
 
 把“麦克风录音 + 本地 ASR + LLM 意图理解 + Koch 机械臂控制 + TTS 语音播放”收口成一个稳定入口。
 

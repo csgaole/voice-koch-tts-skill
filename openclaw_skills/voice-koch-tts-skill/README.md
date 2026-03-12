@@ -1,4 +1,4 @@
-# voice-koch-tts-skill
+# voice-koch-tts-skill-v1.0
 
 OpenClaw skill wrapper for:
 
