@@ -2,6 +2,8 @@
 
 OpenClaw skill for voice-driven Koch robot control with TTS playback.
 
+Release baseline: `v1.0.0`
+
 This package wires together:
 
 - microphone recording
