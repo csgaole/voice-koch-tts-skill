@@ -18,6 +18,7 @@ from stt_qwen_mic import check_arecord, prepare_output_path, record_audio
 OPENCLAW_CONFIG = Path(__file__).resolve().parents[1] / ".openclaw" / "openclaw0309.json"
 DEFAULT_KIMI_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_KIMI_MODEL = "moonshot/kimi-k2.5"
+DEFAULT_KIMI_FALLBACK_MODEL = "moonshot-v1-8k"
 SUPPORTED_ACTIONS = {"home", "ready", "dance", "status", "power_down", "custom_sequence"}
 ACTION_TO_KOCH_COMMAND = {
     "home": "home",
@@ -414,6 +415,11 @@ def load_openclaw_defaults() -> dict[str, str | None]:
             or os.getenv("OPENAI_MODEL")
             or DEFAULT_KIMI_MODEL
         ),
+        "fallback_model": (
+            os.getenv("KIMI_FALLBACK_MODEL")
+            or os.getenv("MOONSHOT_FALLBACK_MODEL")
+            or DEFAULT_KIMI_FALLBACK_MODEL
+        ),
     }
 
     if not OPENCLAW_CONFIG.exists():
@@ -468,6 +474,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"LLM model id. Default: {DEFAULT_KIMI_MODEL}",
     )
     parser.add_argument(
+        "--llm-fallback-model",
+        default=llm_defaults["fallback_model"] or DEFAULT_KIMI_FALLBACK_MODEL,
+        help=f"Fallback LLM model if the default model is unavailable. Default: {DEFAULT_KIMI_FALLBACK_MODEL}",
+    )
+    parser.add_argument(
         "--llm-api-key",
         default=llm_defaults["api_key"],
         help="LLM API key. Defaults to env vars referenced by OpenClaw config.",
@@ -484,6 +495,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def normalize_base_url(base_url: str) -> str:
     return base_url.rstrip("/")
+
+
+def should_retry_with_fallback_model(error: Exception, model: str, fallback_model: str | None) -> bool:
+    if not fallback_model or fallback_model == model:
+        return False
+    message = str(error)
+    return "resource_not_found_error" in message or "Permission denied" in message or "Not found the model" in message
 
 
 def strip_markdown_fences(text: str) -> str:
@@ -687,7 +705,14 @@ def validate_llm_result(result: dict) -> dict:
     }
 
 
-def call_llm(user_text: str, base_url: str, api_key: str, model: str, timeout: int) -> dict:
+def call_llm(
+    user_text: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    timeout: int,
+    fallback_model: str | None = None,
+) -> dict:
     if not base_url:
         raise RuntimeError("LLM base URL is not configured.")
     if not api_key:
@@ -696,32 +721,48 @@ def call_llm(user_text: str, base_url: str, api_key: str, model: str, timeout: i
         raise RuntimeError("LLM model is not configured.")
 
     endpoint = f"{normalize_base_url(base_url)}/chat/completions"
-    payload = {
-        "model": model,
-        "temperature": 0,
-        "max_tokens": 600,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"ASR 转写文本：{user_text}"},
-        ],
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
+    def request_once(model_name: str) -> str:
+        payload = {
+            "model": model_name,
+            "temperature": 0,
+            "max_tokens": 600,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": f"ASR 转写文本：{user_text}"},
+            ],
+        }
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        raw_response = post_json_request(request, timeout=timeout, retries=1)
+        body = json.loads(raw_response)
+        return body["choices"][0]["message"]["content"]
+
+    fallback_model = (
+        fallback_model
+        or os.getenv("KIMI_FALLBACK_MODEL")
+        or os.getenv("MOONSHOT_FALLBACK_MODEL")
+        or DEFAULT_KIMI_FALLBACK_MODEL
     )
-
-    raw = post_json_request(request, timeout=timeout, retries=1)
-
+    active_model = model
     try:
-        body = json.loads(raw)
-        content = body["choices"][0]["message"]["content"]
+        content = request_once(active_model)
     except Exception as exc:
-        raise RuntimeError(f"Unexpected LLM response body: {raw}") from exc
+        if should_retry_with_fallback_model(exc, model=active_model, fallback_model=fallback_model):
+            print(
+                f"[WARN] LLM model {active_model} unavailable; retrying with fallback model {fallback_model}",
+                file=sys.stderr,
+            )
+            active_model = fallback_model
+            content = request_once(active_model)
+        else:
+            raise
 
     try:
         return validate_llm_result(parse_json_object(content))
@@ -732,7 +773,7 @@ def call_llm(user_text: str, base_url: str, api_key: str, model: str, timeout: i
                 raw_text=content,
                 base_url=base_url,
                 api_key=api_key,
-                model=model,
+                model=active_model,
                 timeout=timeout,
             )
             return validate_llm_result(repaired)
@@ -787,6 +828,7 @@ def main() -> int:
             api_key=args.llm_api_key,
             model=args.llm_model,
             timeout=args.llm_timeout,
+            fallback_model=args.llm_fallback_model,
         )
         print(f"[LLM] {json.dumps(llm_result, ensure_ascii=False)}")
 
