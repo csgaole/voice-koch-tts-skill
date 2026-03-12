@@ -497,6 +497,13 @@ def normalize_base_url(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+def temperature_for_model(model: str) -> float | int:
+    normalized = (model or "").strip().lower()
+    if normalized == "kimi-k2.5":
+        return 1
+    return 0
+
+
 def should_retry_with_fallback_model(error: Exception, model: str, fallback_model: str | None) -> bool:
     if not fallback_model or fallback_model == model:
         return False
@@ -578,7 +585,7 @@ def repair_json_with_llm(
     endpoint = f"{normalize_base_url(base_url)}/chat/completions"
     payload = {
         "model": model,
-        "temperature": 0,
+        "temperature": temperature_for_model(model),
         "max_tokens": 600,
         "messages": [
             {
@@ -724,7 +731,7 @@ def call_llm(
     def request_once(model_name: str) -> str:
         payload = {
             "model": model_name,
-            "temperature": 0,
+            "temperature": temperature_for_model(model_name),
             "max_tokens": 600,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},

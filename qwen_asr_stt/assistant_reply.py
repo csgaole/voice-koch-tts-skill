@@ -35,6 +35,13 @@ def is_weather_query(text: str) -> bool:
     return any(keyword in lowered for keyword in keywords)
 
 
+def temperature_for_model(model: str) -> float | int:
+    normalized = (model or "").strip().lower()
+    if normalized == "kimi-k2.5":
+        return 1
+    return 0.3
+
+
 def post_chat_reply(
     user_text: str,
     base_url: str,
@@ -45,7 +52,7 @@ def post_chat_reply(
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
         "model": model,
-        "temperature": 0.3,
+        "temperature": temperature_for_model(model),
         "max_tokens": 160,
         "messages": [
             {
