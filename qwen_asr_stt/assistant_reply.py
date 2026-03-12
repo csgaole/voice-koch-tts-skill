@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import re
 import time
 import urllib.parse
@@ -42,6 +43,28 @@ def temperature_for_model(model: str) -> float | int:
     return 0.3
 
 
+def extract_message_content(body: dict) -> str:
+    try:
+        message = body["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError(f"Unexpected assistant reply body: {body}") from exc
+
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str) and item.strip():
+                parts.append(item.strip())
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
 def post_chat_reply(
     user_text: str,
     base_url: str,
@@ -50,36 +73,53 @@ def post_chat_reply(
     timeout: int,
 ) -> str:
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
-    payload = {
-        "model": model,
-        "temperature": temperature_for_model(model),
-        "max_tokens": 160,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你是一个简短中文语音助手。"
-                    "当用户说的话与机械臂无关时，你应该直接回答用户的问题，而不是拒绝。"
-                    "回答要自然、简短、适合直接 TTS 播放，控制在两到三句话内。"
-                    "如果问题带有明显高风险、专业建议或你不确定，就明确说明不确定并给出保守回答。"
-                    "不要输出 markdown，不要自称只负责机械臂。"
-                ),
-            },
-            {"role": "user", "content": user_text},
-        ],
-    }
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        },
-        method="POST",
+    fallback_model = (
+        os.getenv("KIMI_FALLBACK_MODEL")
+        or os.getenv("MOONSHOT_FALLBACK_MODEL")
+        or "moonshot-v1-8k"
     )
-    raw = post_json_request(request, timeout=timeout, retries=1)
-    body = json.loads(raw)
-    return str(body["choices"][0]["message"]["content"]).strip()
+
+    def request_once(model_name: str) -> str:
+        payload = {
+            "model": model_name,
+            "temperature": temperature_for_model(model_name),
+            "max_tokens": 220,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一个简短中文语音助手。"
+                        "当用户说的话与机械臂无关时，你应该直接回答用户的问题，而不是拒绝。"
+                        "回答要自然、简短、适合直接 TTS 播放，控制在两到三句话内。"
+                        "如果问题带有明显高风险、专业建议或你不确定，就明确说明不确定并给出保守回答。"
+                        "不要输出 markdown，不要自称只负责机械臂。"
+                    ),
+                },
+                {"role": "user", "content": user_text},
+            ],
+        }
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+            method="POST",
+        )
+        raw = post_json_request(request, timeout=timeout, retries=1)
+        body = json.loads(raw)
+        content = extract_message_content(body)
+        if not content:
+            raise RuntimeError(f"assistant reply model {model_name} returned empty content")
+        return content
+
+    try:
+        return request_once(model)
+    except Exception:
+        if fallback_model and fallback_model != model:
+            return request_once(fallback_model)
+        raise
 
 
 def post_json_request(request: urllib.request.Request, timeout: int, retries: int = 1) -> str:
@@ -101,6 +141,8 @@ def fallback_general_reply(user_text: str) -> str:
     lowered = user_text.strip().lower()
     if any(keyword in lowered for keyword in ["小鹏", "汽车", "车", "特斯拉", "比亚迪"]):
         return "小鹏汽车整体偏智能化和科技感，座舱和辅助驾驶是它比较受关注的点。要是你愿意，我也可以继续用语音给你简单聊聊它的优缺点。"
+    if any(keyword in lowered for keyword in ["湖州", "杭州", "苏州", "上海", "北京", "城市"]):
+        return "湖州整体节奏比较舒服，生活感强，环境也不错，太湖周边和江南水乡的气质比较明显。要是你愿意，我可以继续从宜居、旅游或者产业几个角度跟你聊。"
     return "这个问题我可以陪你聊，不过刚才网络有点慢。你可以再问一次，我会尽量简短回答。"
 
 

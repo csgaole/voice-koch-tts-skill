@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import shlex
 import sys
 from pathlib import Path
 
 from assistant_reply import fallback_general_reply, get_weather_reply, is_weather_query, post_chat_reply
-from stt_koch_bridge import execute_koch_command, execute_koch_payload
 from stt_koch_llm_bridge import (
-    ACTION_TO_KOCH_COMMAND,
+    apply_robot_rules,
     build_parser as build_llm_parser,
-    call_llm,
+    execute_robot_plan,
+    interpret_robot_intent,
     normalize_base_url,
 )
 from stt_qwen import fail, transcribe_audio_file
@@ -81,13 +80,15 @@ def main() -> int:
             f"[INFO] Calling LLM {args.llm_model} via {normalize_base_url(args.llm_base_url or '')}",
             file=sys.stderr,
         )
-        llm_result = call_llm(
+        semantic_result = interpret_robot_intent(
             user_text=text,
             base_url=args.llm_base_url,
             api_key=args.llm_api_key,
             model=args.llm_model,
             timeout=args.llm_timeout,
+            fallback_model=args.llm_fallback_model,
         )
+        llm_result = apply_robot_rules(text, semantic_result)
         print(f"[LLM] {json.dumps(llm_result, ensure_ascii=False)}")
 
         if not llm_result["execute"]:
@@ -101,6 +102,8 @@ def main() -> int:
                     model=args.llm_model,
                     timeout=min(args.llm_timeout, 20),
                 )
+                if not assistant_reply.strip():
+                    raise RuntimeError("assistant reply is empty")
             except Exception as exc:
                 print(f"[WARN] Assistant reply fallback triggered: {exc}", file=sys.stderr)
                 assistant_reply = fallback_general_reply(text)
@@ -119,23 +122,7 @@ def main() -> int:
 
         maybe_speak(llm_result.get("reply", ""), args)
 
-        if llm_result["action"] == "custom_sequence":
-            payload = {
-                "action": "custom_sequence",
-                "sequence": llm_result["sequence"],
-                "hold_position": False,
-                "return_to_home": True,
-                "power_down_after": True,
-            }
-            print(
-                f"[INFO] Sending custom sequence to koch-skill: {json.dumps(payload, ensure_ascii=False)}",
-                file=sys.stderr,
-            )
-            ok = execute_koch_payload(payload)
-        else:
-            koch_command = ACTION_TO_KOCH_COMMAND[llm_result["action"]]
-            print(f"[INFO] Sending to koch-skill: {shlex.quote(koch_command)}", file=sys.stderr)
-            ok = execute_koch_command(koch_command)
+        ok = execute_robot_plan(llm_result)
 
         if not ok:
             fail("koch-skill rejected or failed to execute the LLM action.")
