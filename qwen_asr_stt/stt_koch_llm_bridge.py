@@ -746,6 +746,103 @@ def validate_llm_result(result: dict) -> dict:
     }
 
 
+CHINESE_NUMBER_MAP = {
+    "零": 0,
+    "一": 1,
+    "二": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+    "十": 10,
+}
+
+
+def parse_count_token(token: str) -> int | None:
+    token = token.strip()
+    if not token:
+        return None
+    if token.isdigit():
+        return int(token)
+    if token == "十":
+        return 10
+    if len(token) == 2 and token[0] == "十" and token[1] in CHINESE_NUMBER_MAP:
+        return 10 + CHINESE_NUMBER_MAP[token[1]]
+    if len(token) == 2 and token[1] == "十" and token[0] in CHINESE_NUMBER_MAP:
+        return CHINESE_NUMBER_MAP[token[0]] * 10
+    if len(token) == 3 and token[1] == "十" and token[0] in CHINESE_NUMBER_MAP and token[2] in CHINESE_NUMBER_MAP:
+        return CHINESE_NUMBER_MAP[token[0]] * 10 + CHINESE_NUMBER_MAP[token[2]]
+    if token in CHINESE_NUMBER_MAP:
+        return CHINESE_NUMBER_MAP[token]
+    return None
+
+
+def extract_requested_swing_count(user_text: str) -> int | None:
+    match = re.search(r"(?:摆动|摆摆手|摆手|摇动|摇摆|挥动|挥手)([零一二两三四五六七八九十\d]+)下", user_text)
+    if not match:
+        return None
+    count = parse_count_token(match.group(1))
+    if count is None:
+        return None
+    return max(1, min(count, 6))
+
+
+def enforce_swing_count_if_needed(user_text: str, llm_result: dict) -> dict:
+    if llm_result.get("action") != "custom_sequence":
+        return llm_result
+
+    requested_count = extract_requested_swing_count(user_text)
+    if not requested_count:
+        return llm_result
+
+    sequence = llm_result.get("sequence", [])
+    if len(sequence) < 2:
+        return llm_result
+
+    pan_steps = [step for step in sequence if "shoulder_pan" in step.get("targets", {})]
+    if len(pan_steps) < 2:
+        return llm_result
+
+    pan_values = [step["targets"]["shoulder_pan"] for step in pan_steps]
+    low = min(pan_values)
+    high = max(pan_values)
+    if low == high:
+        return llm_result
+
+    prep_step = dict(sequence[0])
+    prep_targets = dict(prep_step.get("targets", {}))
+    prep_targets.pop("shoulder_pan", None)
+    prep_step["targets"] = prep_targets
+
+    base_duration = pan_steps[0].get("duration", 0.5)
+    base_pause = pan_steps[0].get("pause", 0.1)
+
+    normalized_sequence = [prep_step]
+    for index in range(requested_count):
+        normalized_sequence.append(
+            {
+                "targets": {"shoulder_pan": high},
+                "duration": base_duration,
+                "pause": base_pause,
+            }
+        )
+        normalized_sequence.append(
+            {
+                "targets": {"shoulder_pan": low},
+                "duration": base_duration,
+                "pause": 0.0 if index == requested_count - 1 else base_pause,
+            }
+        )
+
+    updated = dict(llm_result)
+    updated["sequence"] = normalized_sequence
+    return updated
+
+
 def call_llm(
     user_text: str,
     base_url: str,
@@ -874,6 +971,7 @@ def main() -> int:
             timeout=args.llm_timeout,
             fallback_model=args.llm_fallback_model,
         )
+        llm_result = enforce_swing_count_if_needed(text, llm_result)
         print(f"[LLM] {json.dumps(llm_result, ensure_ascii=False)}")
 
         if not llm_result["execute"]:
